@@ -1,5 +1,7 @@
 import tensorflow_datasets as tfds
 import tensorflow as tf
+import math
+
 
 labels_v1 = [
     "yes",
@@ -77,6 +79,11 @@ labels_v2 = [
 FREQUENCY = 16_000
 DURATION = FREQUENCY # Which means 2 seconds
 
+
+def get_time_steps(frame_length, frame_step, duration=DURATION):
+    return int(math.ceil((duration - frame_length + 1) / frame_step))
+
+
 def get_audio_and_label(x, version):
     audio = x["audio"][:DURATION]
     label = x["label"]
@@ -152,7 +159,7 @@ def get_last_dimension(type, num_coefficients, mel_bands, frame_length):
         return num_coefficients * 3
 
 
-def convert_to_tensor(example_ragged, label, num_coefficients, mel_bands, frame_length, type):
+def convert_to_tensor(example_ragged, label, num_coefficients, mel_bands, frame_length, frame_step, type):
     # Determine the last dimension size based on the type of features
     last_dim_size = get_last_dimension(type, num_coefficients, mel_bands, frame_length)
     
@@ -160,7 +167,7 @@ def convert_to_tensor(example_ragged, label, num_coefficients, mel_bands, frame_
     # The shape argument is set to [None, None, last_dim_size] which means:
     # - Keep the existing sizes for the first two dimensions (batch and time steps)
     # - Set the last dimension to the calculated last_dim_size
-    example_tensor = example_ragged.to_tensor(shape=[None, None, last_dim_size])
+    example_tensor = example_ragged.to_tensor(shape=[None, get_time_steps(frame_length, frame_step), last_dim_size])
 
     return example_tensor, label
 
@@ -195,10 +202,10 @@ def get_tf_dataset(
             lambda mel, label: get_mfccs(mel, label, num_coefficients),
             num_parallel_calls=tf.data.AUTOTUNE)
     return ds.\
-        shuffle(4098).\
+        shuffle(4096).\
         map(convert_to_ragged, num_parallel_calls=tf.data.AUTOTUNE).\
         ragged_batch(batch_size).\
-        map(lambda example, label: convert_to_tensor(example, label, num_coefficients, mel_bands, frame_length, type), num_parallel_calls=tf.data.AUTOTUNE).\
+        map(lambda example, label: convert_to_tensor(example, label, num_coefficients, mel_bands, frame_length, frame_step, type), num_parallel_calls=tf.data.AUTOTUNE).\
         prefetch(tf.data.AUTOTUNE)
 
 

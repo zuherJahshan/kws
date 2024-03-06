@@ -12,6 +12,11 @@ class TemporalBlock(tf.keras.layers.Layer):
         dropout: float = 0.0,
     ):
         super(TemporalBlock, self).__init__()
+        # Primitive properties
+        self.kernel_size = kernel_size
+        self.strides = strides
+        self.dilation_rate = dilation_rate
+
         self.conv = tf.keras.layers.Conv2D(
             filters=filters,
             kernel_size=[kernel_size, 1],
@@ -27,10 +32,10 @@ class TemporalBlock(tf.keras.layers.Layer):
     
     def call(self, inputs):
         # We assume input is of the shape [batch, time, 1, freq]
-        out_timesteps = tf.shape(inputs)[1] // self.strides
-        padding = (self.kernel_size[0] - 1) * self.dilation_rate[0]
+        out_timesteps = tf.cast(tf.shape(inputs)[1] / self.strides, tf.int32)
+        padding = (self.kernel_size - 1) * self.dilation_rate
         if padding > 0:
-            inputs = tf.pad(inputs, tf.constant([(0, 0,), (padding, 0), (0, 0)]) * padding)
+            inputs = tf.pad(inputs, tf.constant([(0, 0,), (padding, 0), (0, 0), (0, 0)]) * padding)
         outputs = self.conv(inputs)
         return self.dropout(outputs)[:, :out_timesteps, :, :]
     
@@ -45,6 +50,9 @@ class TempResBlock(tf.keras.layers.Layer):
         dropout: float = 0.0,
     ):
         super(TempResBlock, self).__init__()
+        # Primitive properties
+        self.type = type
+
         self.tb1 = TemporalBlock(
             filters=filters,
             kernel_size=kernel_size,
@@ -91,13 +99,6 @@ class TempResBlock(tf.keras.layers.Layer):
         x = self.add([y, x])
         return self.act2(x)
     
-
-#     num_blocks=4,
-#     add_block_type_1_in_between=False,
-#     kernel_size=9,
-#     channels=[16, 24, 32, 48],
-#     num_classes=31,
-
 
 class TCResNet(tf.keras.Model):
     def __init__(
