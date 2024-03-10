@@ -1,5 +1,6 @@
 import tensorflow as tf
 
+
 class StateTransformerBlock(tf.keras.layers.Layer):
     def __init__(
         self,
@@ -113,8 +114,8 @@ class StateTransformer(tf.keras.models.Model):
             # Pad in case values are missing
             if tf.shape(curr_input_seq)[1] < self.input_seq_size:
                 curr_input_seq = tf.pad(curr_input_seq, [[0, 0], [0, self.input_seq_size - tf.shape(curr_input_seq)[1]], [0, 0]])
-            z = self.calc_z(state_t, curr_input_seq)
-            r = self.calc_r(state_t, curr_input_seq)
+            z = tf.keras.activations.sigmoid(self.calc_z(state_t, curr_input_seq))
+            r = tf.keras.activations.sigmoid(self.calc_r(state_t, curr_input_seq))
             current_state = self.calc_current_state(r*state_t, curr_input_seq)
             state_t = (1 - z)*state_t + z*current_state
         
