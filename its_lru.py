@@ -66,7 +66,7 @@ class MultiQueryAttention(tf.keras.layers.Layer):
         # compute the attention weights
         score = tf.matmul(q, k, transpose_b=True)
         score /= tf.math.sqrt(tf.cast(tf.shape(k)[-1], tf.float32))
-        attn = tf.nn.softmax(attn, axis=-1)
+        attn = tf.nn.softmax(score, axis=-1)
         return tf.matmul(attn, v)
 
 
@@ -98,7 +98,7 @@ class StateTransformerBlock(tf.keras.layers.Layer):
         # layers
         self.attention = MultiQueryAttention(
             num_heads=num_heads,
-            key_dim=projection_dim,
+            proj_dim=projection_dim,
             dropout=dropout,
             kernel_regularizer=kernel_regularizer,
         )
