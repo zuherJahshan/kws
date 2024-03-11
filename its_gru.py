@@ -74,6 +74,12 @@ class StateTransformer(tf.keras.models.Model):
             units=projection_dim,
             kernel_regularizer=kernel_regularizer,
         )
+        self.initial_state = self.add_weight(
+            shape=(1, num_state_cells, projection_dim),
+            initializer='random_normal',
+            trainable=True,
+            name='initial_state'
+        )
         # State TE layers
         self.calc_z = StateTransformerBlock(
             num_heads=num_heads,
@@ -107,7 +113,10 @@ class StateTransformer(tf.keras.models.Model):
         input_seq = self.encoding(input_seq)
         # initialize the state sequence
         batch_size = tf.shape(input_seq)[0]
-        state_t = tf.zeros([batch_size, self.num_state_cells, self.projection_dim])
+        
+        # Use the learnable initial state, replicate it for the whole batch
+        state_t = tf.tile(self.initial_state, [batch_size, 1, 1])
+        
         folds = tf.shape(input_seq)[1] // self.input_seq_size
         for fold in range(folds):
             curr_input_seq = input_seq[:, fold*self.input_seq_size:(fold+1)*self.input_seq_size, :]

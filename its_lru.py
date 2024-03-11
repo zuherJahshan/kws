@@ -133,27 +133,29 @@ class StateTransformerBlock(tf.keras.layers.Layer):
         return self.layernorm_2(outer_output) # the output is of shape (batch_size, num_of_state_cells, projection_dim)
     
 
-class StateTransformer(tf.keras.models.Model):
+class ITSRU(tf.keras.layers.Layer):
     def __init__(
         self,
-        num_classes,
         num_heads,
         num_state_cells,
-        input_seq_size,
         projection_dim,
         inner_ff_dim,
+        initial_state_trainability=False,
         dropout=0.0,
         kernel_regularizer=None,
     ):
-        super(StateTransformer, self).__init__()
-        # primitive properties
-        self.projection_dim = projection_dim
-        self.num_state_cells = num_state_cells
-        self.input_seq_size = input_seq_size
+        super(ITSRU, self).__init__()
 
         self.encoding = tf.keras.layers.Dense(
             units=projection_dim,
             kernel_regularizer=kernel_regularizer,
+        )
+        # Initialize the learnable initial state
+        self.initial_state = self.add_weight(
+            shape=(1, num_state_cells, projection_dim),
+            initializer='random_normal',
+            trainable=initial_state_trainability,
+            name='initial_state'
         )
         # State TE layers
         self.calc_z = StateTransformerBlock(
@@ -177,29 +179,111 @@ class StateTransformer(tf.keras.models.Model):
             dropout=dropout,
             kernel_regularizer=kernel_regularizer,
         )
-        self.classifier = tf.keras.layers.Dense(
-            units=num_classes,
-            kernel_regularizer=kernel_regularizer,
-            activation="softmax",
-        )
+
+
+    def set_initial_state_trainability(self, trainable):
+        self.initial_state._trainable = trainable
+
 
     def call(self, input_seq):
-        # Assume the input sequence is of the shape (batch_size, all_seq, input_seq), we want to reshape it to be (batch_size, -1, input_seq_size, projection_dim)
+        # Assume that input is of size [B,T,S,D] where B is the batch size, T is the number of time steps, S is the sequence length at each timestep, and D is the feature dimension
         input_seq = self.encoding(input_seq)
         # initialize the state sequence
         batch_size = tf.shape(input_seq)[0]
-        state_t = tf.zeros([batch_size, self.num_state_cells, self.projection_dim])
-        folds = tf.shape(input_seq)[1] // self.input_seq_size
+        # Use the learnable initial state, replicate it for the whole batch
+        state_t = tf.tile(self.initial_state, [batch_size, 1, 1])
+        
+        folds = tf.shape(input_seq)[1]
+        states = tf.TensorArray(tf.float32, size=0)
         for fold in range(folds):
-            curr_input_seq = input_seq[:, fold*self.input_seq_size:(fold+1)*self.input_seq_size, :]
-            # Pad in case values are missing
-            if tf.shape(curr_input_seq)[1] < self.input_seq_size:
-                curr_input_seq = tf.pad(curr_input_seq, [[0, 0], [0, self.input_seq_size - tf.shape(curr_input_seq)[1]], [0, 0]])
+            curr_input_seq = input_seq[:, fold, :, :]
             z = self.calc_z(state_t, curr_input_seq)
             r = self.calc_r(state_t, curr_input_seq)
             current_state = self.calc_current_state(r*state_t, curr_input_seq)
             state_t = (1 - z)*state_t + z*current_state
+            states.write(state_t)
         
-        return self.classifier(state_t[:, 0, :])
+        return tf.transpose(
+            states.stack(),
+            [1, 0, 2, 3]
+        )
 
+
+class ITS(tf.keras.models.Model):
+    def __init__(
+        self,
+        num_classes,
+        num_heads,
+        num_repeats,
+        num_state_cells,
+        input_seq_size,
+        projection_dim,
+        inner_ff_dim,
+        initial_state_trainability=False,
+        dropout=0.0,
+        kernel_regularizer=None,
+    ):
+        super(ITS, self).__init__()
+        # the input sequence size
+        self.input_seq_size = input_seq_size
         
+        # ITS recurrent units
+        self.itsrus = [ ITSRU(
+            num_heads=num_heads,
+            num_state_cells=num_state_cells,
+            projection_dim=projection_dim,
+            inner_ff_dim=inner_ff_dim,
+            initial_state_trainability=initial_state_trainability,
+            dropout=dropout,
+            kernel_regularizer=kernel_regularizer,
+        ) for _ in range(num_repeats) ]
+        
+        self.label_token = self.add_weight(
+            shape=(1, 1, projection_dim),
+            initializer='random_normal',
+            trainable=initial_state_trainability,
+            name='initial_state'
+        )
+        self.mixer = StateTransformerBlock(
+            num_heads=num_heads,
+            projection_dim=projection_dim,
+            inner_ff_dim=inner_ff_dim,
+            dropout=dropout,
+            kernel_regularizer=kernel_regularizer,
+        )
+
+        self.classifier = tf.keras.layers.Dense(
+            units=num_classes,
+            activation="softmax",
+        )
+
+
+
+    def call(self, input_seq):
+        # input_seq is of shape (batch_size, input_size, feature_dim).
+        # First of all, we will transform it to the shape (batch_size, folds, input_seq_size, projection_dim)
+        # Pad the input sequence to the nearest multiple of input_seq_size
+        input_seq_size = input_seq.shape[1]
+        final_time_steps = tf.cast(tf.math.ceil(input_seq_size / self.input_seq_size), tf.int32)
+        folds = final_time_steps // self.input_seq_size
+        input_seq = tf.pad(
+            input_seq,
+            [[0, 0], [0, final_time_steps - input_seq_size], [0, 0]]
+        )
+        
+        input_seq = tf.reshape(
+            input_seq,
+            [-1, folds, input_seq_size, input_seq.shape[-1]]
+        )
+        # pass the input sequence through the ITSRUs
+        x = input_seq
+        for itsru in self.itsrus:
+            x = itsru(x)
+
+        # mix the states of the last timestep with the label token
+        # transform the label weight to the shape (batch_size, 1, projection_dim)
+        label_token = tf.tile(self.label_token, [tf.shape(x)[0], 1, 1])
+        x = self.mixer(label_token, x[:, -1, :, :])
+        x = tf.squeeze(x)
+
+        return self.classifier(x)
