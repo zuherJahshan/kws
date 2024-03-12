@@ -194,14 +194,18 @@ class ITSRU(tf.keras.layers.Layer):
         state_t = tf.tile(self.initial_state, [batch_size, 1, 1])
         
         folds = tf.shape(input_seq)[1]
-        states = tf.TensorArray(tf.float32, size=0)
+        states = tf.TensorArray(
+            tf.float32,
+            dynamic_size=True,
+            size=0
+        )
         for fold in range(folds):
             curr_input_seq = input_seq[:, fold, :, :]
             z = self.calc_z(state_t, curr_input_seq)
             r = self.calc_r(state_t, curr_input_seq)
             current_state = self.calc_current_state(r*state_t, curr_input_seq)
             state_t = (1 - z)*state_t + z*current_state
-            states.write(state_t)
+            states = states.write(fold, state_t)#.mark_used()
         
         return tf.transpose(
             states.stack(),
@@ -264,8 +268,8 @@ class ITS(tf.keras.models.Model):
         # First of all, we will transform it to the shape (batch_size, folds, input_seq_size, projection_dim)
         # Pad the input sequence to the nearest multiple of input_seq_size
         input_seq_size = input_seq.shape[1]
-        final_time_steps = tf.cast(tf.math.ceil(input_seq_size / self.input_seq_size), tf.int32)
-        folds = final_time_steps // self.input_seq_size
+        folds = tf.cast(tf.math.ceil(input_seq_size / self.input_seq_size), tf.int32)
+        final_time_steps = folds * self.input_seq_size
         input_seq = tf.pad(
             input_seq,
             [[0, 0], [0, final_time_steps - input_seq_size], [0, 0]]
@@ -273,7 +277,7 @@ class ITS(tf.keras.models.Model):
         
         input_seq = tf.reshape(
             input_seq,
-            [-1, folds, input_seq_size, input_seq.shape[-1]]
+            [-1, folds, self.input_seq_size, input_seq.shape[-1]]
         )
         # pass the input sequence through the ITSRUs
         x = input_seq
@@ -282,8 +286,9 @@ class ITS(tf.keras.models.Model):
 
         # mix the states of the last timestep with the label token
         # transform the label weight to the shape (batch_size, 1, projection_dim)
-        label_token = tf.tile(self.label_token, [tf.shape(x)[0], 1, 1])
-        x = self.mixer(label_token, x[:, -1, :, :])
-        x = tf.squeeze(x)
+        # label_token = tf.tile(self.label_token, [tf.shape(x)[0], 1, 1])
+        # x = self.mixer(label_token, x[:, -1, 0, :])
+        # x = tf.squeeze(x, axis=1)
 
-        return self.classifier(x)
+        return self.classifier(x[:, -1, 0, :])
+        # return x
