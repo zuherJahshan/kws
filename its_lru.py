@@ -81,6 +81,40 @@ class MultiQueryAttention(tf.keras.layers.Layer):
         return self.output_layer(concat)
         
 
+class RotaryPositionalEncoding(tf.keras.layers.Layer):
+    def __init__(self, theta_0, projection_dim):
+        super(RotaryPositionalEncoding, self).__init__()
+        self.indices = tf.constant([(i // 2) for i in range(projection_dim)], dtype=tf.float32)
+        self.thetas = theta_0 ** (-2 * (self.indices / projection_dim)) # thetas are of shape (projection_dim,)
+
+
+    def call(self, input_seq):
+        # input_seq is of shape (batch, input_seq_size, projection_dim)
+        # compute the positional encoding
+        input_seq_shape = tf.shape(input_seq)
+        batch_size = input_seq_shape[0]
+        input_seq_size = input_seq_shape[1]
+        # create a vector of indices
+        seq_indices = tf.range(0, input_seq_size, 1, dtype=tf.float32) # indices are of shape (input_seq_size,)
+        # we need to create a matrix of shape (input_seq_size, projection_dim)
+        seq_indices = tf.expand_dims(seq_indices, axis=-1)
+        seq_indices = tf.tile(seq_indices, [1, tf.shape(input_seq)[2]])
+        linear_phase = seq_indices * self.thetas
+
+        # calculate the phase with consnie
+        phased_with_cos = input_seq * tf.math.cos(linear_phase)
+
+        # Rotate and multiply by [-1,1,-1,1,...] to calculate the phase with sine
+        shifted_input_seq = tf.reshape(input_seq, [batch_size, input_seq_size, -1, 2])
+        shifted_input_seq = tf.roll(shifted_input_seq, shift=1, axis=-1)
+        shifted_input_seq = shifted_input_seq * tf.constant([-1,1], dtype=tf.float32)
+        shifted_input_seq = tf.reshape(shifted_input_seq, [batch_size, input_seq_size, -1])
+        phased_with_sin =  tf.math.sin(linear_phase) * shifted_input_seq
+        
+        return phased_with_cos + phased_with_sin
+
+
+
 class StateTransformerBlock(tf.keras.layers.Layer):
     def __init__(
         self,
@@ -232,6 +266,10 @@ class ITS(tf.keras.models.Model):
         self.input_seq_size = input_seq_size
         
         # ITS recurrent units
+        self.rope = RotaryPositionalEncoding(
+            theta_0=10000,
+            projection_dim=projection_dim,
+        )
         self.itsrus = [ ITSRU(
             num_heads=num_heads,
             num_state_cells=num_state_cells,
@@ -274,6 +312,7 @@ class ITS(tf.keras.models.Model):
             input_seq,
             [[0, 0], [0, final_time_steps - input_seq_size], [0, 0]]
         )
+        input_seq = self.rope(input_seq)
         
         input_seq = tf.reshape(
             input_seq,

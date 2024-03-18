@@ -162,4 +162,7 @@ cython_debug/
 # ignore everything inside the ./data and ./models directories
 /data/**
 /models/**
+
+# ignore any nohup.out files anywhere in the directory
+**/nohup.out
 ```

@@ -6,7 +6,7 @@ from tensorflow import keras
 
 # %%
 from dataset import get_datasets
-from its_lru import ITS
+from its_safoos import ITS
 
 # %%
 #### hyper parameters that defines the structure of the model
@@ -16,7 +16,7 @@ sampled_frequencies = 129 # the number of frequency samples
 learning_rate = 0.001
 weight_decay = 0.005
 batch_size = 64
-epochs = 25
+epochs = 60
 # patch_size = 6  # Size of the patches to be extract from the input images
 # num_patches = (image_size // patch_size) ** 2
 projection_dim = 64
@@ -83,55 +83,54 @@ import csv
 
 def init_results_file(filename, repeats_to_examine, state_cells_to_examine, epochs):
     model_names = []
-    for num_repeats in repeats_to_examine:
-        for num_state_cells in state_cells_to_examine:
-            model_names.append(f"r={num_repeats},s={num_state_cells}")
+    for num_repeats, num_state_cells in zip(repeats_to_examine, state_cells_to_examine):    
+        model_names.append(f"r={num_repeats},s={num_state_cells}")
     with open(filename, 'w') as f:
         writer = csv.writer(f)
         writer.writerow(model_names)
         writer.writerows([[0] * len(model_names)] * epochs)
 
 
-repeats_to_examine = [1, 2, 4]
-state_cells_to_examine = [1, 4, 10, 15]
-init_results_file('results.csv', repeats_to_examine, state_cells_to_examine, epochs)
-for num_repeats in repeats_to_examine:
-    for num_state_cells in state_cells_to_examine:
-        state_transformer = ITS(
-            num_classes=31,
-            num_repeats=2,
-            num_heads=8,
-            num_state_cells=num_state_cells,
-            input_seq_size=31,
-            projection_dim=32,
-            inner_ff_dim=64,
-            dropout=0.1,
-            kernel_regularizer=tf.keras.regularizers.l2(0.01),
-        )
+results_filename = 'results_safoos.csv' 
+repeats_to_examine =        [1, 2, 2]
+state_cells_to_examine =    [1, 4, 10]
+init_results_file(results_filename, repeats_to_examine, state_cells_to_examine, epochs)
+for num_repeats, num_state_cells in zip(repeats_to_examine, state_cells_to_examine):
+    state_transformer = ITS(
+        num_classes=31,
+        num_repeats=num_repeats,
+        num_heads=8,
+        num_state_cells=num_state_cells,
+        input_seq_size=31,
+        projection_dim=32,
+        inner_ff_dim=64,
+        dropout=0.1,
+        kernel_regularizer=tf.keras.regularizers.l2(0.01),
+    )
 
-        state_transformer.compile(
-            optimizer=tf.keras.optimizers.AdamW(learning_rate),
-            loss="categorical_crossentropy",
-            metrics=["accuracy"],
-        )
+    state_transformer.compile(
+        optimizer=tf.keras.optimizers.AdamW(learning_rate),
+        loss="categorical_crossentropy",
+        metrics=["accuracy"],
+    )
 
 
-        model_path = "./models/its_chkpnt/its_chkpnt.ckpt"
-        model_checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
-            filepath=model_path,
-            save_weights_only=True,
-            save_freq="epoch",
-            verbose=0,
-        )
+    model_path = "./models/its_chkpnt/its_chkpnt.ckpt"
+    model_checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
+        filepath=model_path,
+        save_weights_only=True,
+        save_freq="epoch",
+        verbose=0,
+    )
 
-        state_transformer_history = state_transformer.fit(
-            train,
-            validation_data=valid,
-            epochs=epochs,
-            callbacks=[
-                ResultsWriter("results.csv", num_repeats, num_state_cells),
-            ],
-        )
+    state_transformer_history = state_transformer.fit(
+        train,
+        validation_data=valid,
+        epochs=epochs,
+        callbacks=[
+            ResultsWriter(results_filename, num_repeats, num_state_cells),
+        ],
+    )
 
 
 # %%
