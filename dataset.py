@@ -1,7 +1,7 @@
 import tensorflow_datasets as tfds
 import tensorflow as tf
 import math
-
+from urban_sound_ds import get_background_noise_dataset
 
 labels_v1 = [
     "yes",
@@ -84,16 +84,17 @@ def get_time_steps(frame_length, frame_step, duration=DURATION):
     return int(math.ceil((duration - frame_length + 1) / frame_step))
 
 
-def get_audio_and_label(x, version):
-    audio = x["audio"][:DURATION]
+def get_audio_and_label(x, noise, version):
+    audio = tf.cast(x["audio"], tf.float32)
     label = x["label"]
-    if tf.shape(audio)[0] < DURATION:
-        audio = tf.pad(audio, paddings=[[DURATION - tf.shape(audio)[0], 0]])
     
     # the label is an int inside [0, 30]. Please convert it to a one-hot vector of size 31
+    audio = audio / (2 ** 15)
+
+
     label = tf.one_hot(label, len(labels_v1 if version == 1 else labels_v2))
     
-    return audio, label
+    return audio, noise, label
 
 
 # Change audio to spectrogram and label to one-hot encoded label
@@ -173,6 +174,27 @@ def convert_to_tensor(example_ragged, label, num_coefficients, mel_bands, frame_
 
 
 
+def add_time_shift_noise_and_align(audio, noise, label, max_shift_in_ms):
+    # randomly shift the audio by at most 100ms
+    max_shift = (max_shift_in_ms * FREQUENCY) // 1000
+    time_shift = tf.random.uniform(shape=(), minval=0, maxval=max_shift, dtype=tf.int32)
+    future = tf.random.uniform(shape=(), minval=0, maxval=2, dtype=tf.int32)
+
+    audio = tf.cond(
+        future == 0,
+        lambda: tf.pad(audio[time_shift:], paddings=[[0, time_shift]]),
+        lambda: tf.pad(audio[:-time_shift], paddings=[[time_shift, 0]])
+    )
+    
+    if tf.shape(audio)[0] < DURATION:
+        audio = tf.pad(audio, paddings=[[DURATION - tf.shape(audio)[0], 0]])
+
+    noise_redution_coefficient = 16
+    audio = audio[:DURATION] + (noise[:DURATION] / noise_redution_coefficient)
+    audio.set_shape((DURATION,))
+
+    return audio, label
+
 
 def get_tf_dataset(
     raw_dataset,
@@ -182,21 +204,32 @@ def get_tf_dataset(
     type,
     batch_size,
     mel_bands,
-    num_coefficients
+    num_coefficients,
+    max_shift_in_ms
 ):
     # Always happens
     ds = raw_dataset.map(
-        lambda x: get_audio_and_label(x, version),
+        lambda x, noise: get_audio_and_label(x, noise, version),
         num_parallel_calls=tf.data.AUTOTUNE)
+    
+    # Data augmentation
+    ds = ds.map(
+        lambda audio, noise, label: add_time_shift_noise_and_align(audio, noise, label, max_shift_in_ms),
+        num_parallel_calls=tf.data.AUTOTUNE)
+    
+    # Transform to spectogram
+    
     ds = ds.map(
         lambda audio, label: get_spectogram(audio, label, version, frame_length, frame_step),
         num_parallel_calls=tf.data.AUTOTUNE)
     
-    # Only on the occurence of the type
+    # Convert to mel spectograms
     if type != "spec":
         ds = ds.map(
             lambda spectrogram, label: get_mel_spectogram(spectrogram, label, mel_bands),
             num_parallel_calls=tf.data.AUTOTUNE)
+    
+    # Convert to MFCCs
     if type != "mel":
         ds = ds.map(
             lambda mel, label: get_mfccs(mel, label, num_coefficients),
@@ -219,37 +252,63 @@ def get_datasets(
     type="mfccs", # Could be spec, mel, or mfcc
     mel_bands=40,
     num_coefficients=13,
+    max_shift_in_ms=100,
+    probability_of_noise=1.0
 ):
     combined_ds = tfds.load(f'huggingface:speech_commands/v0.0{version}')
     return (
         get_tf_dataset(
-            combined_ds["train"],
+            tf.data.Dataset.zip(
+                combined_ds["train"],
+                get_background_noise_dataset(
+                    "data/urban_sound",
+                    combined_ds["train"].cardinality().numpy(),
+                    probability_of_noise=probability_of_noise
+                )
+            ),
             frame_length,
             frame_step,
             version,
             type,
             batch_size,
             mel_bands,
-            num_coefficients
+            num_coefficients,
+            max_shift_in_ms
         ),
         get_tf_dataset(
-            combined_ds["validation"],
+            tf.data.Dataset.zip(
+                combined_ds["validation"],
+                get_background_noise_dataset(
+                    "data/urban_sound",
+                    combined_ds["validation"].cardinality().numpy(),
+                    probability_of_noise=0
+                )
+            ),
             frame_length,
             frame_step,
             version,
             type,
             batch_size,
             mel_bands,
-            num_coefficients
+            num_coefficients,
+            max_shift_in_ms
         ),
         get_tf_dataset(
-            combined_ds["test"],
+            tf.data.Dataset.zip(
+                combined_ds["test"],
+                get_background_noise_dataset(
+                    "data/urban_sound",
+                    combined_ds["test"].cardinality().numpy(),
+                    probability_of_noise=0
+                )
+            ),
             frame_length,
             frame_step,
             version,
             type,
             batch_size,
             mel_bands,
-            num_coefficients
+            num_coefficients,
+            max_shift_in_ms
         ),
     )

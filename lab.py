@@ -16,7 +16,7 @@ sampled_frequencies = 129 # the number of frequency samples
 learning_rate = 0.001
 weight_decay = 0.005
 batch_size = 64
-epochs = 60
+epochs = 200
 # patch_size = 6  # Size of the patches to be extract from the input images
 # num_patches = (image_size // patch_size) ** 2
 projection_dim = 64
@@ -78,6 +78,20 @@ class ResultsWriter(keras.callbacks.Callback):
             writer.writerows(data)
 
 
+def schedule(epoch, lr):
+    drop_rate = 0.8
+    epochs_drop = 10
+    if epoch % epochs_drop == 0:
+        return lr * drop_rate
+    return lr
+
+
+lrs = tf.keras.callbacks.LearningRateScheduler(
+    schedule,
+    verbose=0
+)
+
+
 import csv
 
 
@@ -92,8 +106,8 @@ def init_results_file(filename, repeats_to_examine, state_cells_to_examine, epoc
 
 
 results_filename = 'results_safoos.csv' 
-repeats_to_examine =        [1, 2, 2]
-state_cells_to_examine =    [1, 4, 10]
+repeats_to_examine =        [1]
+state_cells_to_examine =    [1]
 init_results_file(results_filename, repeats_to_examine, state_cells_to_examine, epochs)
 for num_repeats, num_state_cells in zip(repeats_to_examine, state_cells_to_examine):
     state_transformer = ITS(
@@ -115,7 +129,7 @@ for num_repeats, num_state_cells in zip(repeats_to_examine, state_cells_to_exami
     )
 
 
-    model_path = "./models/its_chkpnt/its_chkpnt.ckpt"
+    model_path = f"./models/its_chkpnt_{num_repeats}_{num_state_cells}/its_chkpnt{num_repeats}_{num_state_cells}.ckpt"
     model_checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
         filepath=model_path,
         save_weights_only=True,
@@ -129,6 +143,8 @@ for num_repeats, num_state_cells in zip(repeats_to_examine, state_cells_to_exami
         epochs=epochs,
         callbacks=[
             ResultsWriter(results_filename, num_repeats, num_state_cells),
+            lrs,
+            model_checkpoint_callback,
         ],
     )
 

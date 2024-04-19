@@ -196,7 +196,7 @@ class StateTransformerBlock(tf.keras.layers.Layer):
         return self.layernorm_2(outer_output) # the output is of shape (batch_size, num_of_state_cells, projection_dim)
     
 
-class ITSRU(tf.keras.layers.Layer):
+class StormerRU(tf.keras.layers.Layer):
     def __init__(
         self,
         num_heads,
@@ -207,7 +207,7 @@ class ITSRU(tf.keras.layers.Layer):
         dropout=0.0,
         kernel_regularizer=None,
     ):
-        super(ITSRU, self).__init__()
+        super(StormerRU, self).__init__()
 
         # Initialize the learnable initial state
         self.initial_state = self.add_weight(
@@ -271,7 +271,7 @@ class ITSRU(tf.keras.layers.Layer):
         )
 
 
-class ITS(tf.keras.models.Model):
+class Stormer(tf.keras.models.Model):
     def __init__(
         self,
         num_classes,
@@ -285,7 +285,7 @@ class ITS(tf.keras.models.Model):
         dropout=0.0,
         kernel_regularizer=None,
     ):
-        super(ITS, self).__init__()
+        super(Stormer, self).__init__()
         # the input sequence size
         self.input_seq_size = input_seq_size
         
@@ -300,7 +300,7 @@ class ITS(tf.keras.models.Model):
             projection_dim=projection_dim,
         )
         
-        self.itsrus = [ ITSRU(
+        self.itsrus = [ StormerRU(
             num_heads=num_heads,
             num_state_cells=num_state_cells,
             projection_dim=projection_dim,
@@ -309,20 +309,6 @@ class ITS(tf.keras.models.Model):
             dropout=dropout,
             kernel_regularizer=kernel_regularizer,
         ) for _ in range(num_repeats) ]
-        
-        # self.label_token = self.add_weight(
-        #     shape=(1, 1, projection_dim),
-        #     initializer='random_normal',
-        #     trainable=initial_state_trainability,
-        #     name='initial_state'
-        # )
-        # self.mixer = StateTransformerBlock(
-        #     num_heads=num_heads,
-        #     projection_dim=projection_dim,
-        #     inner_ff_dim=inner_ff_dim,
-        #     dropout=dropout,
-        #     kernel_regularizer=kernel_regularizer,
-        # )
 
         self.classifier = tf.keras.layers.Dense(
             units=num_classes,
